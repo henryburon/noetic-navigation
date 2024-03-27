@@ -8,15 +8,18 @@
 ros::Publisher cmd_vel_pub;
 ros::Subscriber laser_sub;
 double goal_x, goal_y, current_angle, current_x, current_y;
-double front_scan, right_scan, left_scan;
+double front_obstacle, right_obstacle, left_obstacle;
 double orient_tolerance = 10.0, goal_tolerance = 0.3;
-bool facing_goal = false;
+bool facing_goal, goal_reached = false;
+bool clear_path_to_goal = false;
 
 
 // Function declarations
 void publishCmdVelocity(double linear_x, double angular_z);
 void laserCallback(const sensor_msgs::LaserScan::ConstPtr& scan_msg);
 bool orientToGoal(double goal_x, double goal_y, double current_x, double current_y, double current_angle, double orient_tolerance);
+bool checkGoalCondition(double goal_x, double goal_y, double current_x, double current_y, double goal_tolerance);
+
 
 enum State {
    IDLE,
@@ -72,7 +75,7 @@ int main(int argc, char **argv) {
       switch (current_state) {
          case IDLE:
             // Do nothing
-            publishCmdVelocity(0.0, 0.0);
+            // publishCmdVelocity(0.0, 0.0);
             break;
 
          case DRIVING_TO_GOAL:
@@ -87,11 +90,11 @@ int main(int argc, char **argv) {
 
 
             
-            facing_goal = orientToGoal(goal_x, goal_y, current_x, current_y, current_angle, 8.0);
+            // facing_goal = orientToGoal(goal_x, goal_y, current_x, current_y, current_angle, 8.0);
             
             if (facing_goal) {
                // Drive forward
-               publishCmdVelocity(0.20, 0.0);
+               // publishCmdVelocity(0.20, 0.0);
             }
 
             
@@ -100,6 +103,16 @@ int main(int argc, char **argv) {
             break;
 
          case FOLLOWING_PERIMETER:
+            if (clear_path_to_goal) {
+               // Orient to goal first, to avoid re-activating the FOLLOWING_PERIMETER state
+               facing_goal = orientToGoal(goal_x, goal_y, current_x, current_y, current_angle, 8.0);
+               if (facing_goal) {
+                  current_state = DRIVING_TO_GOAL; 
+               }
+            }
+            else {
+               // Follow the perimeter/obstacle/wall
+            }
             break;
 
          case GOAL_REACHED:
@@ -120,11 +133,14 @@ int main(int argc, char **argv) {
 }
 
 void laserCallback(const sensor_msgs::LaserScan::ConstPtr& scan_msg) {
+   if (goal_reached) {
+      return;
+   }
 
    // Get the distance to the wall on each side of the robot
-   front_scan = scan_msg->ranges[0];
-   right_scan = scan_msg->ranges[270];
-   left_scan = scan_msg->ranges[90];
+   front_obstacle = scan_msg->ranges[0];
+   right_obstacle = scan_msg->ranges[270];
+   left_obstacle = scan_msg->ranges[90];
 
    // Check if the path to the goal from the current position is clear (checks 1 meter in front of the robot)
    double angle_to_goal = atan2(goal_y - current_y, goal_x - current_x) * 180 / M_PI;
@@ -135,34 +151,51 @@ void laserCallback(const sensor_msgs::LaserScan::ConstPtr& scan_msg) {
       rounded_angle_diff += 360;
    }
 
-   bool clear_path = true;
-   for (int i = rounded_angle_diff - 6; i <= rounded_angle_diff + 6; i++) {
+   clear_path_to_goal = true;
+   for (int i = rounded_angle_diff - 4; i <= rounded_angle_diff + 4; i++) {
       int index = (i + 360) % 360; // Ensure the index is within [0, 359]
       if (scan_msg->ranges[index] <= 1.0) { // Checks 1 meter in front of the robot
-         clear_path = false;
+         clear_path_to_goal = false;
          break;
       }
    }
-
    // If 1 meter in the direction of the goal is clear, DRIVE TO GOAL
-   if (clear_path) {
+   if (clear_path_to_goal) {
       current_state = DRIVING_TO_GOAL;
    }
 
-
-
-
+   // Check if there is an obstacle in front of the robot  
+   for (int i = -4; i <= 4; i++) {
+      int index = (i + 360) % 360; // Ensure the index is within [0, 359]
+      if (scan_msg->ranges[index] <= 1.0) { // Checks 1 meter in front of the robot
+         front_obstacle = true;
+      }
+      else {
+         front_obstacle = false;
+      }
    }
 
-   // Check if the path to the goal is clear
-      // If yes, change state to DRIVING_TO_GOAL
+   // Check if there is an obstacle on the left side of the robot
+   if (scan_msg->ranges[90] <= 1.0) {
+      left_obstacle = true;
+   }
+   else {
+      left_obstacle = false;
+   }
 
+   // Check if there is an obstacle on the right side of the robot
+   if (scan_msg->ranges[270] <= 1.0) {
+      right_obstacle = true;
+   }
+   else {
+      right_obstacle = false;
+   }
 
+   // log the obstacle distances (bools)
+   ROS_INFO("Front: %f, Left: %f, Right: %f", front_obstacle, left_obstacle, right_obstacle);
 
-   // Check if the path to the goal is clear
-      // If yes, change state to DRIVING_TO_GOAL
-      // If no, change state to FOLLOWING_PERIMETER
-
+   
+}
    
 
 bool orientToGoal(double goal_x, double goal_y, double current_x, double current_y, double current_angle, double orient_tolerance) {
@@ -215,4 +248,14 @@ void publishCmdVelocity(double linear_x, double angular_z) {
 
       // Publish the message on /cmd_vel topic
       cmd_vel_pub.publish(msg);
+}
+
+bool checkGoalCondition(double goal_x, double goal_y, double current_x, double current_y, double goal_tolerance) {
+   double distance_to_goal = sqrt(pow(goal_x - current_x, 2) + pow(goal_y - current_y, 2));
+   if (distance_to_goal <= goal_tolerance) {
+      goal_reached = true;
+      current_state = GOAL_REACHED;
+      return true;
+   }
+   return false;
 }
