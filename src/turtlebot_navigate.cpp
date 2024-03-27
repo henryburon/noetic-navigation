@@ -136,10 +136,17 @@ void laserCallback(const sensor_msgs::LaserScan::ConstPtr& scan_msg) {
       rounded_angle_diff += 360;
    }
 
+   // measure distance to goal
+   double distance_to_goal = sqrt(pow(goal_x - current_x, 2) + pow(goal_y - current_y, 2));
+   double scan_distance = 1.0;
+   if (distance_to_goal < 1.0) {
+      scan_distance = distance_to_goal;
+   }
+
    clear_path_to_goal = true;
    for (int i = rounded_angle_diff - 4; i <= rounded_angle_diff + 4; i++) {
       int index = (i + 360) % 360; // Ensure the index is within [0, 359]
-      if (scan_msg->ranges[index] <= 1.0) { // Checks 1 meter in front of the robot
+      if (scan_msg->ranges[index] <= scan_distance) { // Checks 1 meter in front of the robot
          clear_path_to_goal = false;
          break;
       }
@@ -156,7 +163,7 @@ void laserCallback(const sensor_msgs::LaserScan::ConstPtr& scan_msg) {
    // Check if there is an obstacle in front of the robot  
    for (int i = -4; i <= 4; i++) {
       int index = (i + 360) % 360; // Ensure the index is within [0, 359]
-      if (scan_msg->ranges[index] <= 1.0) { // Checks 1 meter in front of the robot
+      if (scan_msg->ranges[index] <= scan_distance) { // Checks 1 meter in front of the robot
          front_obstacle = true;
       }
       else {
@@ -165,7 +172,7 @@ void laserCallback(const sensor_msgs::LaserScan::ConstPtr& scan_msg) {
    }
 
    // Check if there is an obstacle on the left side of the robot
-   if (scan_msg->ranges[90] <= 1.0) {
+   if (scan_msg->ranges[90] <= scan_distance) {
       left_obstacle = true;
    }
    else {
@@ -173,7 +180,7 @@ void laserCallback(const sensor_msgs::LaserScan::ConstPtr& scan_msg) {
    }
 
    // Check if there is an obstacle on the right side of the robot
-   if (scan_msg->ranges[270] <= 1.0) {
+   if (scan_msg->ranges[270] <= scan_distance) {
       right_obstacle = true;
    }
    else {
@@ -181,7 +188,6 @@ void laserCallback(const sensor_msgs::LaserScan::ConstPtr& scan_msg) {
    }
 
    if (front_obstacle && initial_orientation_fixed) {
-      publishCmdVelocity(0.0, 0.0);
       orientation_fixed = false;
       current_state = FOLLOWING_PERIMETER;
    }
@@ -189,28 +195,35 @@ void laserCallback(const sensor_msgs::LaserScan::ConstPtr& scan_msg) {
 
 void followPerimeter() {
    // orient parallel to the perimeter/wall/obstacle
+
+   ROS_INFO("Front scan: %f", front_scan);
+   ROS_INFO("Right scan: %f", right_scan);
    
    if (orientation_fixed == false) {
-      if (right_scan > 0.5) {
-         publishCmdVelocity(0.0, -0.20);
+      if (front_scan < 1.0) {
+         publishCmdVelocity(0.0, 0.20);
       }
       else {
          orientation_fixed = true;
+         publishCmdVelocity(0.0, 0.0);
       }
    }
    else if (orientation_fixed) {
-      // Follow the perimeter
+      
+
+      ROS_INFO("Orientation fixed!");
+      
 
       // Maintain going straight, following object on the right
       if (right_scan > 0.5 && right_scan < 1.5) {
-         publishCmdVelocity(0.25, 0.10);
+         publishCmdVelocity(0.15, -0.10);
       }
       else if (right_scan <= 0.5) {
-         publishCmdVelocity(0.25, -0.10);
+         publishCmdVelocity(0.15, 0.10);
       }
 
       // Curve right, if no object on the right
-      else if (right_scan > 1.5) {
+      else if (right_scan >= 1.5) {
          publishCmdVelocity(0.15, -0.25);
       }
    }   
@@ -238,9 +251,6 @@ bool orientToGoal(double goal_x, double goal_y, double current_x, double current
    } else if (angle_diff < -180) {
       angle_diff += 360;
    }
-
-   // log angle difference
-   ROS_INFO("Angle difference: %f", angle_diff);
 
    // Publish the appropriate cmd_vel based on the angle difference
    if (angle_diff > orient_tolerance) {
