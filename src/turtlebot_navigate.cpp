@@ -9,9 +9,11 @@ ros::Publisher cmd_vel_pub;
 ros::Subscriber laser_sub;
 double goal_x, goal_y, current_angle, current_x, current_y;
 double front_obstacle, right_obstacle, left_obstacle;
+double front_scan, right_scan, left_scan;
 double orient_tolerance = 10.0, goal_tolerance = 0.3;
 bool facing_goal, goal_reached = false;
 bool clear_path_to_goal = false;
+bool initial_orientation_fixed, orientation_fixed = false;
 
 
 // Function declarations
@@ -19,7 +21,7 @@ void publishCmdVelocity(double linear_x, double angular_z);
 void laserCallback(const sensor_msgs::LaserScan::ConstPtr& scan_msg);
 bool orientToGoal(double goal_x, double goal_y, double current_x, double current_y, double current_angle, double orient_tolerance);
 bool checkGoalCondition(double goal_x, double goal_y, double current_x, double current_y, double goal_tolerance);
-
+void followPerimeter();
 
 enum State {
    IDLE,
@@ -73,36 +75,24 @@ int main(int argc, char **argv) {
 
       // State machine
       switch (current_state) {
+
          case IDLE:
-            // Do nothing
-            // publishCmdVelocity(0.0, 0.0);
+            publishCmdVelocity(0.0, 0.0);
             break;
 
          case DRIVING_TO_GOAL:
+         ROS_INFO("Driving to goal");
 
-            // Check if the goal is reached
-               // If yes, change state to GOAL_REACHED
-               // If no, continue
-            // Check if facing the goal
-               // If yes, drive forward
-               // If no, rotate to face the goal
-            
-
-
-            
-            // facing_goal = orientToGoal(goal_x, goal_y, current_x, current_y, current_angle, 8.0);
-            
+            facing_goal = orientToGoal(goal_x, goal_y, current_x, current_y, current_angle, 8.0);
             if (facing_goal) {
                // Drive forward
-               // publishCmdVelocity(0.20, 0.0);
+               publishCmdVelocity(0.30, 0.0);
             }
-
-            
-
-
             break;
 
          case FOLLOWING_PERIMETER:
+         ROS_INFO("Following perimeter");
+
             if (clear_path_to_goal) {
                // Orient to goal first, to avoid re-activating the FOLLOWING_PERIMETER state
                facing_goal = orientToGoal(goal_x, goal_y, current_x, current_y, current_angle, 8.0);
@@ -111,7 +101,7 @@ int main(int argc, char **argv) {
                }
             }
             else {
-               // Follow the perimeter/obstacle/wall
+               followPerimeter();
             }
             break;
 
@@ -137,11 +127,6 @@ void laserCallback(const sensor_msgs::LaserScan::ConstPtr& scan_msg) {
       return;
    }
 
-   // Get the distance to the wall on each side of the robot
-   front_obstacle = scan_msg->ranges[0];
-   right_obstacle = scan_msg->ranges[270];
-   left_obstacle = scan_msg->ranges[90];
-
    // Check if the path to the goal from the current position is clear (checks 1 meter in front of the robot)
    double angle_to_goal = atan2(goal_y - current_y, goal_x - current_x) * 180 / M_PI;
    double robot_angle = current_angle * 180 / M_PI;
@@ -163,6 +148,10 @@ void laserCallback(const sensor_msgs::LaserScan::ConstPtr& scan_msg) {
    if (clear_path_to_goal) {
       current_state = DRIVING_TO_GOAL;
    }
+
+   front_scan = scan_msg->ranges[0];
+   left_scan = scan_msg->ranges[90];
+   right_scan = scan_msg->ranges[270];
 
    // Check if there is an obstacle in front of the robot  
    for (int i = -4; i <= 4; i++) {
@@ -191,12 +180,50 @@ void laserCallback(const sensor_msgs::LaserScan::ConstPtr& scan_msg) {
       right_obstacle = false;
    }
 
-   // log the obstacle distances (bools)
-   ROS_INFO("Front: %f, Left: %f, Right: %f", front_obstacle, left_obstacle, right_obstacle);
+   if (front_obstacle && initial_orientation_fixed) {
+      publishCmdVelocity(0.0, 0.0);
+      orientation_fixed = false;
+      current_state = FOLLOWING_PERIMETER;
+   }
+}
+
+void followPerimeter() {
+   // orient parallel to the perimeter/wall/obstacle
+   
+   if (orientation_fixed == false) {
+      if (right_scan > 0.5) {
+         publishCmdVelocity(0.0, -0.20);
+      }
+      else {
+         orientation_fixed = true;
+      }
+   }
+   else if (orientation_fixed) {
+      // Follow the perimeter
+
+      // Maintain going straight, following object on the right
+      if (right_scan > 0.5 && right_scan < 1.5) {
+         publishCmdVelocity(0.25, 0.10);
+      }
+      else if (right_scan <= 0.5) {
+         publishCmdVelocity(0.25, -0.10);
+      }
+
+      // Curve right, if no object on the right
+      else if (right_scan > 1.5) {
+         publishCmdVelocity(0.15, -0.25);
+      }
+   }   
+}
 
    
-}
-   
+
+
+
+
+
+
+
 
 bool orientToGoal(double goal_x, double goal_y, double current_x, double current_y, double current_angle, double orient_tolerance) {
    
@@ -218,17 +245,17 @@ bool orientToGoal(double goal_x, double goal_y, double current_x, double current
    // Publish the appropriate cmd_vel based on the angle difference
    if (angle_diff > orient_tolerance) {
       // Rotate CCW
-      publishCmdVelocity(0.0, 0.20);
+      publishCmdVelocity(0.0, 0.25);
       return false;
    }
    else if (angle_diff < -orient_tolerance) {
       // Rotate CW
-      publishCmdVelocity(0.0, -0.20);
+      publishCmdVelocity(0.0, -0.25);
       return false;
    }
    else {
-      // Stop rotating
-      // publishCmdVelocity(0.0, 0.0);
+      // Stop oreinting
+      initial_orientation_fixed = true;
       return true;
    }
 }
